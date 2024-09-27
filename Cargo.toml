@@ -1,0 +1,13 @@
+[package]
+name = "rust"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = {version = "1.14.0", features = ["full"]}
+datafusion = "41.0.0"
+async-trait = "0.1.80"
+strum_macros = "0.26.4"
+futures = "0.3"
