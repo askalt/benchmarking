@@ -1,7 +1,13 @@
-use datafusion::prelude::SessionConfig;
+use datafusion::{
+    arrow::array::RecordBatch,
+    execution::TaskContext,
+    physical_plan::{collect, ExecutionPlan},
+    prelude::SessionConfig,
+};
 use std::{
     env,
     io::{self, Write},
+    sync::Arc,
     time::Instant,
 };
 
@@ -9,6 +15,14 @@ use datafusion::{
     arrow::{self},
     prelude::{CsvReadOptions, SessionContext},
 };
+
+async fn collect_exec_plan(
+    plan: Arc<dyn ExecutionPlan>,
+    context: &SessionContext,
+) -> datafusion::common::Result<Vec<RecordBatch>> {
+    let task_ctx = Arc::new(TaskContext::from(&context.state()));
+    collect(plan, task_ctx).await
+}
 
 #[tokio::main]
 async fn main() {
@@ -37,6 +51,26 @@ async fn main() {
     let mut c = 0;
     let mut ts = Instant::now();
 
+    let statement = ctx.state().sql_to_statement(&query, "Generic").unwrap();
+    let plan = ctx.state().statement_to_plan(statement).await.unwrap();
+    println!("logical plan = {}", plan);
+
+    let exec_plan = ctx.state().create_physical_plan(&plan).await.unwrap();
+
+    {
+        // EXPLAIN.
+        let explain_query = format!("EXPLAIN {}", query);
+        println!(
+            "explained:\n{:?}",
+            ctx.sql(&explain_query)
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap()
+        );
+    }
+
     for i in 0..1000 {
         if i % p == 0 && i > 0 {
             let rps = (p as f64) / (ts.elapsed().as_secs() as f64);
@@ -45,11 +79,7 @@ async fn main() {
             c += 1;
             ts = Instant::now();
         }
-        res += ctx
-            .sql(&query)
-            .await
-            .unwrap()
-            .collect()
+        res += collect_exec_plan(Arc::clone(&exec_plan), &ctx)
             .await
             .unwrap()
             .len();
