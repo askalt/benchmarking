@@ -58,3 +58,72 @@ async fn main() {
     println!("res = {}", res);
     println!("mean = {}", s / (c as f64));
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::{arrow::{array::{Array, Int32Array, RecordBatch}, datatypes::{Field, Schema, SchemaRef}}, physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner}, prelude::SessionContext};
+
+    #[tokio::test]
+    async fn execution_plan_creation_bench() {
+        let ctx = SessionContext::new();
+        let mut fields = vec![];
+        let mut columns = vec![];
+        const COLUMNS_NUM: usize = 200;
+
+        for i in 0..COLUMNS_NUM {
+            fields.push(Field::new(format!("attribute{}", i), datafusion::arrow::datatypes::DataType::Int32, true));
+            columns.push(Int32Array::from(vec![1]));
+        }
+
+        let batch = RecordBatch::try_new(
+            SchemaRef::new(Schema::new(fields)),
+            columns
+                .into_iter()
+                .map(|it| Arc::new(it) as Arc<dyn Array>)
+                .collect(),
+        )
+        .unwrap();
+
+        ctx.register_batch("t", batch).unwrap();
+
+        let mut aggregates = String::new();
+        for i in 0..COLUMNS_NUM {
+            if i > 0 {
+                aggregates.push_str(", ");
+            }
+            aggregates.push_str(format!("MAX(attribute{})", i).as_str());
+        }
+
+        /*
+            SELECT max(attr0), ..., max(attrN) FROM t
+        */
+        let query = format!("SELECT {} FROM t", aggregates);
+        let mut res = 0;
+
+        let statement = ctx.state().sql_to_statement(&query, "Generic").unwrap();
+        let plan = ctx.state().statement_to_plan(statement).await.unwrap();
+        let planner = DefaultPhysicalPlanner::default();
+
+        let mut duration_sum = 0.0;
+        let mut durtaion_count = 0;
+
+        for _ in 0..500 {
+            let creation_start = std::time::Instant::now();
+            let phys_plan = planner
+                .create_physical_plan(&plan, &ctx.state())
+                .await
+                .unwrap();
+            duration_sum += creation_start.elapsed().as_micros() as f64;
+            durtaion_count += 1;
+            res += phys_plan.children().len();
+            println!("================================");
+        }
+
+        println!("mean = {}", duration_sum / (durtaion_count as f64));
+
+        /* Not important. */
+        println!("res [not important, just to not discard] = {}", res);
+    }
+}
